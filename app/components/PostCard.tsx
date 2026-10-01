@@ -1,7 +1,7 @@
 import Image from "next/image";
 import { getTimeAgo } from "../utils/time";
 import HeartIcon from "./HeartIcon";
-import { Post } from "../mocks/posts";
+import { Post } from "../tipe";
 
 export default function PostCard({ post, onLike }: { post: Post; onLike: (id: number | string) => void }) {
   return (
