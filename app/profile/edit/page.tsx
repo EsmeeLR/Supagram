@@ -1,8 +1,8 @@
-"use client";
+"usje client";
 
-import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
 interface Profile {

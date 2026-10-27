@@ -1,116 +1,201 @@
 "use client";
 
-import Image from "next/image";
-import { useEffect, useState } from "react";
-import { getTimeAgo } from "./utils/time";
+import { useState, useEffect } from "react";
+import { Post, Comment } from "./tipe";
 import { supabase } from "./lib/supabase";
-import HeartIcon from "./components/HeartIcon";
-import { Post } from "./tipe";
+import PostCard from "./components/PostCard";
 
-
-
-function PostCard({ post, onLike }: { post: Post; onLike: (id: number | string) => void }) {
-  return (
-    <article className="bg-card-bg border border-border rounded-xl overflow-hidden shadow-sm">
-      {/* Header con usuario y avatar */}
-      <div className="flex items-center gap-3 p-4">
-        <div className="relative w-10 h-10 rounded-full overflow-hidden ring-2 ring-primary">
-          <Image
-            src={post.user?.avatar || 'https://i.pravatar.cc/150?img=9'}
-            alt={post.user?.username || 'default user'}
-            fill
-            className="object-cover"
-          />
-        </div>
-        <div className="flex flex-col">
-          <span className="font-semibold text-foreground">{post.user?.username || 'default user'}</span>
-          <span className="text-xs text-foreground/50">{getTimeAgo(new Date(post.created_at))}</span>
-        </div>
-      </div>
-
-      {/* Imagen del post */}
-      <div className="relative w-full aspect-square">
-        <Image
-          src={post.image_url}
-          alt={`Post de ${post.user?.username || 'default user'}`}
-          fill
-          className="object-cover"
-        />
-      </div>
-
-      {/* Acciones y caption */}
-      <div className="p-4">
-        {/* Botón de like con contador */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onLike(post.id)}
-            className="hover:scale-110 transition-transform active:scale-95"
-            aria-label={post.isLiked ? "Quitar like" : "Dar like"}
-          >
-            <HeartIcon filled={post.isLiked} />
-          </button>
-          <span className="font-semibold text-foreground">
-            {post.likes.toLocaleString()} likes
-          </span>
-        </div>
-
-        {/* Caption */}
-        <p className="mt-2 text-foreground">
-          <span className="font-semibold">{post.user?.username || 'default user'}</span>{" "}
-          <span className="text-foreground/80">{post.caption}</span>
-        </p>
-      </div>
-    </article>
-  );
-}
 
 export default function Home() {
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
-  const [posts, setPosts] = useState<Post[]>([])
-
+  // Obtener usuario actual
   useEffect(() => {
-    async function getPosts() {
-      const { data: posts } = await 
-      supabase.from('posts')
-      .select('*')
-      .order('created_at', {
-        ascending: false
-      })
-      //.gte('likes', 80)
-      //.range(5, 9)
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setCurrentUserId(user?.id || null);
+    };
+    getUser();
+  }, []);
 
-      if (posts) {
-        setPosts(posts)
-        console.log(posts)
+  // Toggle like: insertar o eliminar de tabla likes
+  const handleLike = async (postId: number | string) => {
+    if (!currentUserId) return;
+
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+
+    if (post.isLiked) {
+      // Quitar like
+      const { error } = await supabase
+        .from("likes")
+        .delete()
+        .eq("user_id", currentUserId)
+        .eq("post_id", postId);
+
+      if (!error) {
+        setPosts((prev) =>
+          prev.map((p) =>
+            p.id === postId
+              ? { ...p, isLiked: false, likes_count: p.likes_count - 1 }
+              : p
+          )
+        );
+      }
+    } else {
+      // Dar like
+      const { error } = await supabase
+        .from("likes")
+        .insert({ user_id: currentUserId, post_id: postId });
+
+      if (!error) {
+        setPosts((prev) =>
+          prev.map((p) =>
+            p.id === postId
+              ? { ...p, isLiked: true, likes_count: p.likes_count + 1 }
+              : p
+          )
+        );
       }
     }
-
-    getPosts()
-  }, [])
-
-  //const [posts, setPosts] = useState<Post[]>(initialPosts);
-
-  const handleLike = (postId: number | string) => {
-    setPosts((prevPosts) =>
-      prevPosts.map((post) =>
-        post.id === postId
-          ? {
-              ...post,
-              isLiked: !post.isLiked,
-              likes: post.isLiked ? post.likes - 1 : post.likes + 1,
-            }
-          : post
-      )
-    );
   };
+
+  // Agregar comentario
+  const handleComment = async (postId: number | string, body: string) => {
+    if (!currentUserId) return;
+
+    const { data, error } = await supabase
+      .from("comments")
+      .insert({ user_id: currentUserId, post_id: postId, body })
+      .select("id, user_id, post_id, body, created_at")
+      .single();
+
+    if (!error && data) {
+      // Obtener profile del usuario actual
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("username, avatar_url")
+        .eq("id", currentUserId)
+        .single();
+
+      const newComment: Comment = {
+        ...data,
+        profile: profileData || undefined,
+      };
+
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId
+            ? { ...p, comments: [...(p.comments || []), newComment] }
+            : p
+        )
+      );
+    }
+  };
+
+  // Cargar posts con likes y comentarios
+  useEffect(() => {
+    const fetchPosts = async () => {
+      // 1. Obtener posts
+      const { data: postsData, error: postsError } = await supabase
+        .from("posts")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (postsError) {
+        console.error("Error al obtener los posts:", postsError);
+        return;
+      }
+
+      const postIds = postsData.map((p) => p.id);
+      const userIds = [...new Set(postsData.map((p) => p.user_id))];
+
+      // 2. Obtener profiles
+      const { data: profilesData } = await supabase
+        .from("profiles")
+        .select("id, username, avatar_url")
+        .in("id", userIds);
+
+      const profilesMap = new Map(
+        profilesData?.map((p) => [p.id, { username: p.username, avatar_url: p.avatar_url }]) || []
+      );
+
+      // 3. Contar likes por post
+      const { data: likesCountData } = await supabase
+        .from("likes")
+        .select("post_id")
+        .in("post_id", postIds);
+
+      const likesCountMap = new Map<string | number, number>();
+      likesCountData?.forEach((like) => {
+        const count = likesCountMap.get(like.post_id) || 0;
+        likesCountMap.set(like.post_id, count + 1);
+      });
+
+      // 4. Verificar likes del usuario actual
+      let userLikesSet = new Set<string | number>();
+      if (currentUserId) {
+        const { data: userLikesData } = await supabase
+          .from("likes")
+          .select("post_id")
+          .eq("user_id", currentUserId)
+          .in("post_id", postIds);
+
+        userLikesSet = new Set(userLikesData?.map((l) => l.post_id) || []);
+      }
+
+      // 5. Obtener comentarios
+      const { data: commentsData } = await supabase
+        .from("comments")
+        .select("id, user_id, post_id, body, created_at")
+        .in("post_id", postIds)
+        .order("created_at", { ascending: true });
+
+      // Obtener profiles de comentadores
+      const commenterIds = [...new Set(commentsData?.map((c) => c.user_id) || [])];
+      const { data: commenterProfiles } = await supabase
+        .from("profiles")
+        .select("id, username, avatar_url")
+        .in("id", commenterIds);
+
+      const commenterProfilesMap = new Map(
+        commenterProfiles?.map((p) => [p.id, { username: p.username, avatar_url: p.avatar_url }]) || []
+      );
+
+      // Agrupar comentarios por post
+      const commentsMap = new Map<string | number, Comment[]>();
+      commentsData?.forEach((comment) => {
+        const postComments = commentsMap.get(comment.post_id) || [];
+        postComments.push({
+          ...comment,
+          profile: commenterProfilesMap.get(comment.user_id),
+        });
+        commentsMap.set(comment.post_id, postComments);
+      });
+
+      // 6. Combinar todo
+      const postsWithData: Post[] = postsData.map((post) => ({
+        ...post,
+        profile: profilesMap.get(post.user_id),
+        likes_count: likesCountMap.get(post.id) || 0,
+        isLiked: userLikesSet.has(post.id),
+        comments: commentsMap.get(post.id) || [],
+      }));
+
+      setPosts(postsWithData);
+    };
+
+    fetchPosts();
+  }, [currentUserId]);
 
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="sticky top-0 z-50 bg-card-bg border-b border-border">
         <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-center">
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-            Supagram
+          <h1 className="text-2xl font-bold bg-linear-to-r from-primary to-accent bg-clip-text text-transparent">
+            Suplatzigram
           </h1>
         </div>
       </header>
@@ -119,7 +204,13 @@ export default function Home() {
       <main className="max-w-lg mx-auto px-4 py-6">
         <div className="flex flex-col gap-6">
           {posts.map((post) => (
-            <PostCard key={post.id} post={post} onLike={handleLike} />
+            <PostCard
+              key={post.id}
+              post={post}
+              currentUserId={currentUserId}
+              onLike={handleLike}
+              onComment={handleComment}
+            />
           ))}
         </div>
       </main>
